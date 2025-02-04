@@ -2,27 +2,62 @@
 import argparse
 import fnmatch
 import pathlib
-import os
 import sys
+import os
+import json
 from typing import List, Optional
 
 import pathspec
 
-# Try to import settings from config.py, if available.
-try:
-    import config
-except ImportError:
-    config = None
+def load_config() -> dict:
+    """
+    Load configuration settings from an external config.json file located in the current working directory.
+    If the file is not found, fallback to default settings.
+    """
+    config_path = os.path.join(os.getcwd(), "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error reading config file '{config_path}': {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Fallback default settings.
+        return {
+            "HARD_CODED_EXCLUDES": [
+                "*.md",
+                "*.txt",
+                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.tiff", "*.svg",
+                "*.mp3", "*.wav", "*.ogg", "*.flac",
+                "package-lock.json"
+            ],
+            "LANGUAGE_MAPPING": {
+                ".py": "python",
+                ".rs": "rust",
+                ".toml": "toml",
+                ".json": "json",
+                ".env": "bash",
+                ".sh": "bash",
+                ".md": "markdown",
+                ".html": "html",
+                ".css": "css",
+                ".js": "javascript"
+            }
+        }
+
+# Load configuration from external JSON file.
+config_data = load_config()
 
 def guess_language(ext: str) -> str:
     """
     Determine the language for a given file extension.
-    If config.LANGUAGE_MAPPING is defined, use it; otherwise, fall back to a minimal default mapping.
+    Uses config_data["LANGUAGE_MAPPING"] if available; otherwise, falls back to a default mapping.
     """
     ext = ext.lower()
-    if config and hasattr(config, "LANGUAGE_MAPPING"):
-        return config.LANGUAGE_MAPPING.get(ext, '')
-    # Fallback default mapping.
+    mapping = config_data.get("LANGUAGE_MAPPING", {})
+    if mapping:
+        return mapping.get(ext, '')
     default_mapping = {
         '.py': 'python',
         '.rs': 'rust',
@@ -88,7 +123,7 @@ def should_include_file(
     The patterns are matched against the file’s relative path (using POSIX-style paths).
 
     - If include_patterns is provided, a file is included only if it matches at least one.
-    - If the file matches any exclude pattern or a gitignore rule it is omitted.
+    - If the file matches any exclude pattern or a gitignore rule, it is omitted.
     """
     try:
         rel = file.relative_to(root)
@@ -144,9 +179,8 @@ def generate_markdown(
     """
     Generate a Markdown document containing:
       1. A directory tree (table of contents) showing only the files that match the filters.
-      2. For each included file, a section with the file’s path and its contents inside a
-         fenced code block (with syntax highlighting if possible).
-
+      2. For each included file, a section with the file’s path and its contents inside a fenced code block.
+    
     The include and exclude patterns are applied relative to the codebase root.
     """
     base = root_path.parent
@@ -216,37 +250,30 @@ def main():
             "Generate a Markdown document documenting a codebase. "
             "The document includes a directory tree (as a table of contents) and file contents with syntax highlighting. "
             "Optionally, you can provide include/exclude glob patterns (relative to the codebase root) to filter files. "
-            "Files matching any .gitignore rules or hardcoded exclusions in config.py will be omitted. "
+            "Files matching any .gitignore rules or hardcoded exclusions (from config.json) will be omitted. "
             "Use --no-gitignore to disable applying .gitignore rules."
         )
     )
     parser.add_argument("input", help="Path to the codebase directory")
     parser.add_argument(
-        "-o",
-        "--output",
+        "-o", "--output",
         default="codebase.md",
-        help="Output Markdown file (default: codebase.md)",
+        help="Output Markdown file (default: codebase.md)"
     )
     parser.add_argument(
         "--include",
         nargs="+",
-        help=(
-            "Glob pattern(s) for files to include (relative to the codebase root). "
-            "Only files matching at least one pattern will be included."
-        ),
+        help="Glob pattern(s) for files to include (relative to the codebase root). Only files matching at least one pattern will be included."
     )
     parser.add_argument(
         "--exclude",
         nargs="+",
-        help=(
-            "Glob pattern(s) for files to exclude (relative to the codebase root). "
-            "Files matching any of these patterns will be omitted."
-        ),
+        help="Glob pattern(s) for files to exclude (relative to the codebase root). Files matching any of these patterns will be omitted."
     )
     parser.add_argument(
         "--no-gitignore",
         action="store_true",
-        help="Disable applying .gitignore file exclusions.",
+        help="Disable applying .gitignore file exclusions."
     )
     args = parser.parse_args()
 
@@ -254,18 +281,14 @@ def main():
     if not root.exists() or not root.is_dir():
         parser.error(f"The input path '{args.input}' is not a valid directory.")
 
-    # Conditionally load .gitignore specifications.
     if args.no_gitignore:
         gitignore_spec = None
     else:
         gitignore_spec = load_gitignore_specs(root)
 
-    # Merge CLI-provided exclude patterns with any hardcoded exclusions from config.py.
     cli_excludes = args.exclude if args.exclude else []
-    if config and hasattr(config, "HARD_CODED_EXCLUDES"):
-        combined_excludes = cli_excludes + config.HARD_CODED_EXCLUDES
-    else:
-        combined_excludes = cli_excludes
+    hardcoded_excludes = config_data.get("HARD_CODED_EXCLUDES", [])
+    combined_excludes = cli_excludes + hardcoded_excludes
 
     try:
         generate_markdown(
