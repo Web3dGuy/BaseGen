@@ -16,7 +16,8 @@
     "*.wav",
     "*.ogg",
     "*.flac",
-    "package-lock.json"
+    "package-lock.json",
+    ".gitattributes"
   ],
   "LANGUAGE_MAPPING": {
     ".1c": "1c",
