@@ -523,18 +523,13 @@ class BaseGenGUI:
     def _generate_markdown_thread(self):
         """Thread worker for Markdown generation"""
         try:
-            # Prepare the include/exclude lists from selected files
-            include_patterns = []
+            # Instead of generating include patterns, we'll directly pass
+            # the selected and excluded file paths to a modified version of
+            # should_include_file
+            selected_paths = self.selected_files
+            excluded_paths = self.excluded_files
             
-            # Convert selected files to patterns
-            for file_path in self.selected_files:
-                path = pathlib.Path(file_path)
-                if path.is_dir():
-                    include_patterns.append(f"{path.name}/**/*")
-                else:
-                    include_patterns.append(path.name)
-            
-            # Get patterns from exclusion listbox
+            # Get patterns from exclusion listbox for additional exclusions
             exclude_patterns = list(self.exclusion_patterns.get(0, tk.END))
             
             # Determine options for enhanced markdown generation
@@ -548,8 +543,9 @@ class BaseGenGUI:
             self._enhanced_generate_markdown(
                 self.workspace_path,
                 self.output_file,
-                include_patterns,
-                exclude_patterns,
+                selected_paths,  # Pass selected paths directly
+                excluded_paths,  # Pass excluded paths directly
+                exclude_patterns,  # Pass additional exclude patterns
                 self.gitignore_spec,
                 add_toc,
                 add_dir_structure,
@@ -566,6 +562,7 @@ class BaseGenGUI:
             self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
             self.root.after(0, lambda: self.update_status(error_msg))
             self.root.after(0, self._finish_generation)
+
     
     def _finish_generation(self):
         """Finish the generation process"""
@@ -597,7 +594,8 @@ class BaseGenGUI:
         self,
         root_path: pathlib.Path,
         output_file: str,
-        include_patterns: Optional[List[str]] = None,
+        selected_paths: Set[str],
+        excluded_paths: Set[str],
         exclude_patterns: Optional[List[str]] = None,
         gitignore_spec: Optional[pathspec.PathSpec] = None,
         add_toc: bool = True,
@@ -619,7 +617,14 @@ class BaseGenGUI:
         included_files = []
         try:
             for file in sorted(root_path.rglob("*")):
-                if file.is_file() and should_include_file(file, root_path, include_patterns, exclude_patterns, gitignore_spec):
+                if file.is_file() and self._should_include_file(
+                    file, 
+                    root_path, 
+                    selected_paths, 
+                    excluded_paths, 
+                    exclude_patterns, 
+                    gitignore_spec
+                ):
                     try:
                         rel_file = file.relative_to(base)
                     except ValueError:
@@ -789,7 +794,66 @@ class BaseGenGUI:
                     lines.append(f"{indent}{key}")
         
         return lines
-    
+
+    def _should_include_file(
+        self,
+        file: pathlib.Path,
+        root: pathlib.Path,
+        selected_paths: Set[str],
+        excluded_paths: Set[str],
+        exclude_patterns: Optional[List[str]] = None,
+        gitignore_spec: Optional[pathspec.PathSpec] = None,
+    ) -> bool:
+        """
+        Decide whether a file should be included based on:
+        1. If any parent directory is explicitly excluded
+        2. If the file itself is explicitly excluded
+        3. If the file or any parent directory is not in selected_paths
+        4. Gitignore rules (if provided)
+        5. Exclude glob patterns
+        """
+        file_str = str(file)
+        
+        # Check if this file or any of its parent directories are explicitly excluded
+        current = file
+        while current != root:
+            if str(current) in excluded_paths:
+                return False
+            current = current.parent
+        
+        # Check if this file (or its parent directory) is specifically selected
+        is_selected = False
+        if file_str in selected_paths:
+            is_selected = True
+        else:
+            # Check if any parent directory is selected
+            current = file.parent
+            while current != root:
+                if str(current) in selected_paths:
+                    is_selected = True
+                    break
+                current = current.parent
+        
+        # If nothing in the path is explicitly selected, exclude it
+        if not is_selected and str(root) not in selected_paths:
+            return False
+        
+        # Check gitignore rules
+        try:
+            rel = file.relative_to(root)
+        except ValueError:
+            rel = file
+            
+        rel_str = str(rel).replace(os.sep, "/")
+        if gitignore_spec and gitignore_spec.match_file(rel_str):
+            return False
+        
+        # Check exclude patterns
+        if exclude_patterns:
+            if any(fnmatch.fnmatch(rel_str, pattern) for pattern in exclude_patterns):
+                return False
+        
+        return True
     
     def _build_tree(self, paths: List[pathlib.Path]) -> dict:
         """Build a nested dictionary representing a directory tree"""
